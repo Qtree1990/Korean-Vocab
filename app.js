@@ -60,8 +60,17 @@ function save() {
 
 function allDecks() {
   const decks = builtinDecks.map(d => ({ name: d.name, cards: d.cards.map(c => ({ ...c, deck: d.name, id: d.name + '::' + c.ko })) }));
-  if (state.own.length) {
-    decks.push({ name: OWN_DECK, cards: state.own.map(c => ({ ...c, deck: OWN_DECK })) });
+  // eigene Karten nach Stapel gruppieren (z. B. „Eigene Karten“, „My First 500 Korean Words“)
+  const groups = new Map();
+  for (const c of state.own) {
+    const name = c.deck || OWN_DECK;
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push({ ...c, deck: name });
+  }
+  for (const [name, cards] of groups) {
+    const existing = decks.find(d => d.name === name);
+    if (existing) existing.cards.push(...cards);
+    else decks.push({ name, cards });
   }
   return decks;
 }
@@ -454,12 +463,14 @@ function renderCards() {
   renderList();
 }
 
-function addOwnCards(list) {
+function addOwnCards(list, deck = OWN_DECK) {
   const existing = new Set(state.own.map(c => c.ko + '|' + c.de));
   let added = 0;
   for (const c of list) {
     if (!c.ko || !c.de || existing.has(c.ko + '|' + c.de)) continue;
-    state.own.push({ id: OWN_DECK + '::' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), ko: c.ko, rom: c.rom || '', de: c.de });
+    const card = { id: 'own::' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), ko: c.ko, rom: c.rom || '', de: c.de };
+    if (deck && deck !== OWN_DECK) card.deck = deck;
+    state.own.push(card);
     existing.add(c.ko + '|' + c.de);
     added++;
   }
@@ -482,7 +493,7 @@ function renderList() {
       if (nextDue <= t) { status = 'fällig'; cls = 'due'; }
       else status = 'in ' + fmtIvl(nextDue - t);
     }
-    const own = c.deck === OWN_DECK;
+    const own = state.own.some(x => x.id === c.id);
     return `
       <div class="row">
         <div class="w">

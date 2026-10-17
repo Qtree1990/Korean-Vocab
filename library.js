@@ -283,6 +283,7 @@ function setBusy(msg) {
 
 const ICON_BOOK = '<svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/></svg>';
 const ICON_PEN = '<svg viewBox="0 0 24 24"><path d="M4 20l4-1L19 8a2.1 2.1 0 0 0-3-3L5 16z"/><path d="M14 7l3 3"/></svg>';
+const ICON_WORD = '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M12 9v6M9 12h6"/></svg>';
 const ICON_CHAT = '<svg viewBox="0 0 24 24"><path d="M5 5h14v10H9l-4 4z"/><path d="M9 9h6M9 12h4"/></svg>';
 
 let openLevel = null;
@@ -503,9 +504,27 @@ function renderReader() {
         <label for="r-note">Antworten zu <span id="r-note-page"></span></label>
         <textarea id="r-note" lang="ko" placeholder="Hier kannst du deine Antworten tippen …"></textarea>
       </div>
+      <div class="r-sheet" id="r-sheet" hidden>
+        <form class="sheet-card" id="w-form" autocomplete="off">
+          <div class="sheet-head">
+            <b>Neue Karte</b>
+            <button type="button" class="icon-btn" id="w-close" aria-label="Schließen">${ICON_CLOSE}</button>
+          </div>
+          <div class="sheet-ko">
+            <input id="w-ko" class="ko" lang="ko" required aria-label="Koreanisch">
+            <button type="button" class="icon-btn" id="w-speak" aria-label="Vorlesen">${ICON_SPEAK}</button>
+          </div>
+          <p class="hint" id="w-exists" hidden></p>
+          <input id="w-de" placeholder="Deutsche Bedeutung" required aria-label="Deutsch" autocapitalize="off">
+          <input id="w-rom" placeholder="Lautschrift (optional)" aria-label="Lautschrift" autocapitalize="off">
+          <label class="sheet-deck">Stapel <select id="w-deck"></select></label>
+          <button class="btn primary" type="submit">Karte speichern</button>
+        </form>
+      </div>
       <div class="r-bottom">
         <button class="icon-btn" id="r-prev" aria-label="Vorherige Seite"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
         <button class="r-tab" id="r-pen">${ICON_PEN}<span>Stift</span></button>
+        <button class="r-tab" id="r-word">${ICON_WORD}<span>Wort</span></button>
         <button class="r-tab" id="r-ans">${ICON_CHAT}<span>Antworten</span></button>
         <button class="r-tab" id="r-pair"><svg viewBox="0 0 24 24"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg><span id="r-pair-l">Workbook</span></button>
         <button class="r-tab" id="r-zoom"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5M8.5 11h5M11 8.5v5"/></svg><span id="r-zoom-l">Zoom</span></button>
@@ -518,6 +537,16 @@ function renderReader() {
   document.getElementById('r-next').onclick = () => goPage(activePane(), activePane().page + 1);
   document.getElementById('r-pageno').onclick = () => askPage(activePane());
   document.getElementById('r-pen').onclick = () => { r.mode = r.mode === 'pen' ? 'read' : 'pen'; updateReaderChrome(); };
+  document.getElementById('r-word').onclick = () => {
+    r.mode = r.mode === 'word' ? 'read' : 'word';
+    updateReaderChrome();
+    if (r.mode === 'word' && !lib().wordHintShown) {
+      toast('Tippe auf ein koreanisches Wort, um daraus eine Karte zu machen');
+      lib().wordHintShown = true;
+      save();
+    }
+  };
+  setupWordSheet();
   document.getElementById('r-ans').onclick = () => {
     r.notesOpen = !r.notesOpen;
     updateReaderChrome();
@@ -554,6 +583,7 @@ function renderReader() {
     el.querySelector('.r-pno').onclick = () => askPage(p);
     setupInk(p);
     setupSwipe(p);
+    p.wrap.addEventListener('click', e => { if (reader && reader.mode === 'word') pickWord(p, e); });
   });
 
   updateReaderChrome();
@@ -582,8 +612,10 @@ function updateReaderChrome() {
   const split = r.panes.length > 1;
   const root = $app.querySelector('.reader');
   root.classList.toggle('pen', r.mode === 'pen');
+  root.classList.toggle('word', r.mode === 'word');
   root.classList.toggle('notes', r.notesOpen);
   root.classList.toggle('split', split);
+  document.getElementById('r-word').classList.toggle('on', r.mode === 'word');
 
   document.getElementById('r-pen').classList.toggle('on', r.mode === 'pen');
   document.getElementById('r-ans').classList.toggle('on', r.notesOpen);
@@ -721,6 +753,7 @@ async function renderPane(p, reload = true) {
   const wide = availW > availH || r.panes.length > 1;
   const scale = (wide ? fitPage : fitW) * p.zoom;
   const vp = page.getViewport({ scale });
+  p.scale = scale;
 
   let dpr = Math.min(window.devicePixelRatio || 1, 2.5);
   const maxPixels = 14e6; // Grenze für iOS-Canvas
@@ -868,6 +901,159 @@ function saveNoteNow() {
   (v.trim() ? idb.put('notes', key, v) : idb.del('notes', key)).catch(() => {});
   const b = document.getElementById('r-ans');
   if (b) b.classList.toggle('has', !!v.trim());
+}
+
+/* ----- Wort antippen → Karte ----------------------------------
+   Liest beim Antippen die Textebene der aktuellen Seite (nur auf dem
+   Gerät) und füllt das Koreanisch-Feld vor. Bedeutung trägst du selbst ein. */
+
+const HANGUL = /[ᄀ-ᇿ㄰-㆏가-힯]/;
+
+async function textLinesFor(p) {
+  const key = `${p.id}:${p.page}:${p.scale}`;
+  if (p.textKey === key) return p.textLines;
+  const page = await p.doc.getPage(p.page);
+  const vp = page.getViewport({ scale: p.scale });
+  const tc = await page.getTextContent();
+  const U = window.pdfjsLib.Util;
+  const items = tc.items.filter(it => it.str && it.str.trim()).map(it => {
+    const t = U.transform(vp.transform, it.transform);
+    const h = Math.hypot(t[2], t[3]) || 10;
+    return { str: it.str, x: t[4], y: t[5] - h, w: Math.max(1, it.width * p.scale), h };
+  });
+  // Nebeneinanderliegende Stücke einer Zeile zusammenfügen (manche PDFs zerlegen Wörter in Einzelzeichen)
+  items.sort((a, b) => (Math.abs(a.y - b.y) < Math.min(a.h, b.h) * 0.4 ? a.x - b.x : a.y - b.y));
+  const lines = [];
+  for (const it of items) {
+    const last = lines[lines.length - 1];
+    const gap = last ? it.x - (last.x + last.w) : Infinity;
+    if (last && Math.abs(last.y - it.y) < Math.min(last.h, it.h) * 0.4 && gap > -it.h * 0.3 && gap < it.h * 0.6) {
+      const space = gap > it.h * 0.2 ? ' ' : '';
+      last.parts.push({ from: last.str.length + space.length, x: it.x, w: it.w, len: it.str.length });
+      last.str += space + it.str;
+      last.w = it.x + it.w - last.x;
+      last.h = Math.max(last.h, it.h);
+    } else {
+      lines.push({ ...it, parts: [{ from: 0, x: it.x, w: it.w, len: it.str.length }] });
+    }
+  }
+  p.textLines = lines.filter(l => HANGUL.test(l.str));
+  p.textKey = key;
+  return p.textLines;
+}
+
+// Bildschirmposition eines Zeichens innerhalb einer Zeile abschätzen
+function charX(line, idx) {
+  const part = line.parts.find(pt => idx >= pt.from && idx <= pt.from + pt.len) || line.parts[line.parts.length - 1];
+  const rel = part.len ? (idx - part.from) / part.len : 0;
+  return part.x + part.w * Math.min(1, Math.max(0, rel));
+}
+
+function findWord(lines, x, y) {
+  let best = null;
+  for (const l of lines) {
+    const dx = x < l.x ? l.x - x : x > l.x + l.w ? x - (l.x + l.w) : 0;
+    const dy = y < l.y ? l.y - y : y > l.y + l.h ? y - (l.y + l.h) : 0;
+    const d = Math.hypot(dx, dy);
+    if (d < 22 && (!best || d < best.d)) best = { l, d };
+  }
+  if (!best) return null;
+  const l = best.l;
+  // Zeichen unter dem Finger finden
+  let idx = 0, bestDx = Infinity;
+  for (let i = 0; i < l.str.length; i++) {
+    const cx = (charX(l, i) + charX(l, i + 1)) / 2;
+    const d = Math.abs(cx - x) + (HANGUL.test(l.str[i]) ? 0 : 6);
+    if (d < bestDx) { bestDx = d; idx = i; }
+  }
+  if (!HANGUL.test(l.str[idx])) {
+    // nächstgelegenes Hangul-Zeichen
+    let k = -1;
+    for (let r = 1; r < l.str.length && k < 0; r++) {
+      if (HANGUL.test(l.str[idx - r] || '')) k = idx - r;
+      else if (HANGUL.test(l.str[idx + r] || '')) k = idx + r;
+    }
+    if (k < 0) return null;
+    idx = k;
+  }
+  let a = idx, b = idx + 1;
+  while (a > 0 && HANGUL.test(l.str[a - 1])) a--;
+  while (b < l.str.length && HANGUL.test(l.str[b])) b++;
+  return {
+    word: l.str.slice(a, b),
+    rect: { x: charX(l, a), y: l.y, w: Math.max(8, charX(l, b) - charX(l, a)), h: l.h }
+  };
+}
+
+async function pickWord(p, e) {
+  const box = p.wrap.getBoundingClientRect();
+  const x = e.clientX - box.left, y = e.clientY - box.top;
+  let lines;
+  try { lines = await textLinesFor(p); } catch (err) { lines = []; }
+  const hit = findWord(lines, x, y);
+  if (!hit) {
+    toast(lines.length ? 'Hier wurde kein koreanisches Wort erkannt' : 'Diese Seite hat keinen lesbaren Text');
+    return;
+  }
+  const mark = document.createElement('div');
+  mark.className = 'word-mark';
+  Object.assign(mark.style, { left: hit.rect.x - 3 + 'px', top: hit.rect.y - 2 + 'px', width: hit.rect.w + 6 + 'px', height: hit.rect.h + 4 + 'px' });
+  p.wrap.appendChild(mark);
+  setTimeout(() => mark.remove(), 1600);
+  openWordSheet(hit.word, p);
+}
+
+function defaultDeckFor(p) {
+  const at = lessonAt(p.id, p.page);
+  if ((p.id === 'tb-1-9' || p.id.startsWith('wb-')) && at) return `TTMIK Level ${at.level}`;
+  if (p.id === 'tb-10') return 'TTMIK Level 10';
+  return p.title;
+}
+
+function openWordSheet(word, p) {
+  const sheet = document.getElementById('r-sheet');
+  const deck = defaultDeckFor(p);
+  const decks = [...new Set([deck, ...state.own.map(c => c.deck || OWN_DECK), OWN_DECK])];
+  document.getElementById('w-deck').innerHTML = decks.map(d => `<option ${d === deck ? 'selected' : ''}>${esc(d)}</option>`).join('');
+  document.getElementById('w-ko').value = word;
+  document.getElementById('w-de').value = '';
+  document.getElementById('w-rom').value = '';
+  showExisting(word);
+  sheet.hidden = false;
+  if (state.settings.autoSpeak) speak(word);
+  setTimeout(() => document.getElementById('w-de').focus(), 50);
+}
+
+function showExisting(word) {
+  const el = document.getElementById('w-exists');
+  const hit = allDecks().flatMap(d => d.cards).find(c => c.ko === word.trim());
+  el.hidden = !hit;
+  if (hit) el.textContent = `Schon als Karte vorhanden: „${hit.de}“ (${hit.deck})`;
+}
+
+function setupWordSheet() {
+  const sheet = document.getElementById('r-sheet');
+  const close = () => { sheet.hidden = true; };
+  document.getElementById('w-close').onclick = close;
+  sheet.addEventListener('click', e => { if (e.target === sheet) close(); });
+  document.getElementById('w-speak').onclick = () => speak(document.getElementById('w-ko').value);
+  document.getElementById('w-ko').oninput = e => showExisting(e.target.value);
+  document.getElementById('w-form').onsubmit = e => {
+    e.preventDefault();
+    const ko = document.getElementById('w-ko').value.trim();
+    const de = document.getElementById('w-de').value.trim();
+    const rom = document.getElementById('w-rom').value.trim();
+    const deck = document.getElementById('w-deck').value;
+    if (!ko || !de) return;
+    const n = addOwnCards([{ ko, rom, de }], deck);
+    if (n) {
+      const count = state.own.filter(c => (c.deck || OWN_DECK) === deck).length;
+      toast(`Gespeichert · ${count} ${count === 1 ? 'Karte' : 'Karten'} in „${deck}“`);
+      close();
+    } else {
+      toast('Diese Karte gibt es schon');
+    }
+  };
 }
 
 /* ----- Wischen zum Blättern ----- */

@@ -36,6 +36,7 @@ Unter **Bibliothek → PDFs hinzufügen** wählst du deine PDFs in der Dateien-A
 - Im Leser springt **Workbook / Lehrbuch** zur passenden Seite derselben Lektion im anderen Buch.
 - **Stift**: mit Finger oder Apple Pencil auf die Seite schreiben (drei Farben, Radierer, Rückgängig). **Antworten**: Textfeld pro Seite.
 - Lektionen in der Liste abhaken; „Weiter mit Lektion …“ führt zur nächsten offenen.
+- **Wort → Karte:** Im Leser auf **Wort** tippen, dann auf ein koreanisches Wort im PDF. Das Wort wird aus der Textebene erkannt und als neue Karte vorgeschlagen; die Bedeutung trägst du selbst ein. Die Karten landen in einem Stapel pro Buch (z. B. „My First 500 Korean Words“, bei Lehrbuch und Workbook „TTMIK Level 1“) und bleiben auf dem Gerät.
 - **iPad:** Im Querformat zeigt der Leser Lehrbuch und Workbook **nebeneinander**. Beginnt im Lehrbuch eine neue Lektion, springt das Workbook automatisch mit. Im Querformat wird die ganze Seite eingepasst, im Hochformat die Breite; der Knopf „Nebeneinander“ oben schaltet die Ansicht um.
 
 ## Vokabeln erweitern

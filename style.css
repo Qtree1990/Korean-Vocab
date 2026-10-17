@@ -391,3 +391,44 @@ body.reading main { max-width: none; padding: 0; }
   .r-bottom { justify-content: center; gap: 24px; }
   .r-tab { flex: 0 0 96px; }
 }
+
+/* ============ Wort → Karte ============ */
+.reader.word .r-page { cursor: pointer; }
+.word-mark {
+  position: absolute; border-radius: 6px; pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: 0 0 0 2px var(--accent);
+  animation: markfade 1.6s ease forwards;
+}
+@keyframes markfade { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
+
+.r-sheet {
+  position: fixed; inset: 0; z-index: 25;
+  display: flex; align-items: flex-end; justify-content: center;
+  background: rgba(20, 15, 10, .28);
+}
+.sheet-card {
+  width: 100%; max-width: 520px;
+  display: flex; flex-direction: column; gap: 10px;
+  background: var(--bg); border-radius: 22px 22px 0 0; box-shadow: var(--shadow);
+  padding: 14px 16px calc(env(safe-area-inset-bottom) + 16px);
+  animation: sheetup .2s ease;
+}
+@keyframes sheetup { from { transform: translateY(30px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (min-width: 700px) {
+  .r-sheet { align-items: center; }
+  .sheet-card { border-radius: 22px; padding-bottom: 18px; }
+}
+.sheet-head { display: flex; align-items: center; justify-content: space-between; }
+.sheet-head b { font-size: 17px; }
+.sheet-ko { display: flex; align-items: center; gap: 8px; }
+.sheet-card input, .sheet-card select {
+  font: inherit; font-size: 16px; color: var(--ink);
+  width: 100%; min-height: 46px; padding: 0 14px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+}
+.sheet-card #w-ko { font-family: var(--font-ko); font-size: 26px; font-weight: 600; min-height: 56px; }
+.sheet-card .hint { margin: 0 2px; color: var(--hard); }
+.sheet-deck { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink-2); }
+.sheet-deck select { flex: 1; min-height: 40px; }
+.sheet-card .btn.primary { margin-top: 4px; }
