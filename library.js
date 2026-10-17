@@ -56,7 +56,7 @@ const lessonCount = level => (level === 1 ? 25 : 30);
 
 /* ---------------- Zustand ---------------- */
 
-state.library = Object.assign({ installed: {}, done: {}, last: {}, maps: {}, stage: 1 }, state.library || {});
+state.library = Object.assign({ installed: {}, done: {}, last: {}, maps: {}, stage: 1, split: true }, state.library || {});
 const lib = () => state.library;
 
 function bookById(id) {
@@ -400,55 +400,99 @@ function bookRow(id, title, hint) {
     </div>`;
 }
 
-/* ---------------- Leser ---------------- */
+/* ---------------- Leser ----------------
+   Ein Leser hat ein oder zwei „Panes“. Im Nebeneinander-Modus zeigt
+   das zweite Pane das passende Gegenstück (Workbook ↔ Lehrbuch) und
+   folgt automatisch, wenn im ersten Pane eine neue Lektion beginnt.   */
 
+const SPLIT_MIN_WIDTH = 900;
 let reader = null;
 
-async function openReader(id, page) {
+const canSplitScreen = () => window.innerWidth >= SPLIT_MIN_WIDTH;
+const activePane = () => reader && reader.panes[reader.active];
+
+async function loadPane(id, page) {
   const inst = lib().installed[id];
-  if (!inst) return;
+  if (!inst) throw new Error('nicht installiert');
+  const blob = await idb.get('files', id);
+  if (!blob) throw new Error('Datei fehlt');
+  const doc = await openPdf(await blob.arrayBuffer());
+  return {
+    id, doc, title: inst.title,
+    page: Math.min(Math.max(1, page || lib().last[id] || 1), doc.numPages),
+    zoom: 1, strokes: [], history: [], note: '', renderTask: null, lessonKey: null
+  };
+}
+
+async function openReader(id, page, opts = {}) {
+  if (!lib().installed[id]) return;
   setBusy('Buch wird geöffnet …');
   try {
-    const blob = await idb.get('files', id);
-    if (!blob) throw new Error('Datei fehlt');
-    const doc = await openPdf(await blob.arrayBuffer());
-    reader = {
-      id, doc, title: inst.title,
-      page: Math.min(Math.max(1, page || lib().last[id] || 1), doc.numPages),
-      zoom: 1, mode: 'read', color: '#1e1b17', tool: 'pen',
-      strokes: [], history: [], notesOpen: false, renderTask: null
-    };
+    const main = await loadPane(id, page);
+    reader = { panes: [main], active: 0, mode: 'read', color: '#1e1b17', tool: 'pen', notesOpen: false };
+    const wantSplit = opts.split ?? (lib().split !== false);
+    if (wantSplit && canSplitScreen()) await addPairPane();
     setBusy(null);
     setView('reader');
   } catch (e) {
     console.error(e);
     setBusy(null);
+    reader = null;
     toast('Buch konnte nicht geöffnet werden');
   }
 }
 
+async function addPairPane() {
+  const main = reader.panes[0];
+  const t = pairTargetFor(main);
+  if (!t) return false;
+  const pane = await loadPane(t.id, t.page);
+  pane.lessonKey = lessonKeyOf(pane);
+  main.lessonKey = lessonKeyOf(main);
+  reader.panes[1] = pane;
+  return true;
+}
+
 function closeReader() {
-  if (reader) { saveNoteNow(); reader.doc.destroy(); }
+  if (reader) {
+    saveNoteNow();
+    reader.panes.forEach(p => { lib().last[p.id] = p.page; p.doc.destroy(); });
+    save();
+  }
   reader = null;
   setView('library');
 }
 
+const PANE_HTML = i => `
+  <section class="r-pane" data-i="${i}">
+    <div class="r-phead">
+      <span class="r-ptitle"></span>
+      <button class="r-pnav" data-nav="-1" aria-label="Vorherige Seite"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <button class="r-pageno r-pno"></button>
+      <button class="r-pnav" data-nav="1" aria-label="Nächste Seite"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+    </div>
+    <div class="r-stage">
+      <div class="r-page"><canvas class="c-pdf"></canvas><canvas class="c-ink"></canvas></div>
+    </div>
+  </section>`;
+
 function renderReader() {
   if (!reader) return setView('library');
   const r = reader;
+  const split = r.panes.length > 1;
+
   $app.innerHTML = `
-    <div class="reader ${r.mode === 'pen' ? 'pen' : ''}">
+    <div class="reader ${split ? 'split' : ''}">
       <div class="r-top">
         <button class="icon-btn" id="r-close" aria-label="Schließen">${ICON_CLOSE}</button>
-        <div class="r-title"><b>${esc(r.title)}</b><span id="r-lesson"></span></div>
+        <div class="r-title"><b id="r-title"></b><span id="r-lesson"></span></div>
+        <button class="r-split" id="r-split" hidden>
+          <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M12 5v14"/></svg>
+          <span>Nebeneinander</span>
+        </button>
         <button class="r-pageno" id="r-pageno"></button>
       </div>
-      <div class="r-stage" id="r-stage">
-        <div class="r-page" id="r-page">
-          <canvas id="r-pdf"></canvas>
-          <canvas id="r-ink"></canvas>
-        </div>
-      </div>
+      <div class="r-panes">${r.panes.map((_, i) => PANE_HTML(i)).join('')}</div>
       <div class="r-pentools" id="r-pentools">
         ${['#1e1b17', '#b2382b', '#2f5d9a'].map(c => `<button class="swatch" data-color="${c}" style="--c:${c}" aria-label="Farbe"></button>`).join('')}
         <button class="tool" data-tool="eraser">Radierer</button>
@@ -456,7 +500,7 @@ function renderReader() {
         <button class="tool" id="r-clear">Seite leeren</button>
       </div>
       <div class="r-notes" id="r-notes">
-        <label for="r-note">Antworten zu Seite <span id="r-note-page"></span></label>
+        <label for="r-note">Antworten zu <span id="r-note-page"></span></label>
         <textarea id="r-note" lang="ko" placeholder="Hier kannst du deine Antworten tippen …"></textarea>
       </div>
       <div class="r-bottom">
@@ -464,147 +508,265 @@ function renderReader() {
         <button class="r-tab" id="r-pen">${ICON_PEN}<span>Stift</span></button>
         <button class="r-tab" id="r-ans">${ICON_CHAT}<span>Antworten</span></button>
         <button class="r-tab" id="r-pair"><svg viewBox="0 0 24 24"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg><span id="r-pair-l">Workbook</span></button>
-        <button class="r-tab" id="r-zoom"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5M8.5 11h5M11 8.5v5"/></svg><span>Zoom</span></button>
+        <button class="r-tab" id="r-zoom"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5M8.5 11h5M11 8.5v5"/></svg><span id="r-zoom-l">Zoom</span></button>
         <button class="icon-btn" id="r-next" aria-label="Nächste Seite"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
       </div>
     </div>`;
 
   document.getElementById('r-close').onclick = closeReader;
-  document.getElementById('r-prev').onclick = () => goPage(r.page - 1);
-  document.getElementById('r-next').onclick = () => goPage(r.page + 1);
-  document.getElementById('r-pageno').onclick = () => {
-    const v = prompt(`Zu Seite (1–${r.doc.numPages}):`, r.page);
-    if (v) goPage(parseInt(v, 10));
-  };
+  document.getElementById('r-prev').onclick = () => goPage(activePane(), activePane().page - 1);
+  document.getElementById('r-next').onclick = () => goPage(activePane(), activePane().page + 1);
+  document.getElementById('r-pageno').onclick = () => askPage(activePane());
   document.getElementById('r-pen').onclick = () => { r.mode = r.mode === 'pen' ? 'read' : 'pen'; updateReaderChrome(); };
-  document.getElementById('r-ans').onclick = () => { r.notesOpen = !r.notesOpen; updateReaderChrome(); if (r.notesOpen) document.getElementById('r-note').focus(); };
-  document.getElementById('r-zoom').onclick = () => { r.zoom = r.zoom === 1 ? 1.6 : r.zoom === 1.6 ? 2.2 : 1; renderPage(); };
+  document.getElementById('r-ans').onclick = () => {
+    r.notesOpen = !r.notesOpen;
+    updateReaderChrome();
+    renderAllPanes(false); // nur neu einpassen, Inhalte bleiben
+    if (r.notesOpen) document.getElementById('r-note').focus();
+  };
+  document.getElementById('r-zoom').onclick = () => {
+    const p = activePane();
+    p.zoom = p.zoom === 1 ? 1.5 : p.zoom === 1.5 ? 2.2 : 1;
+    renderPane(p, false);
+  };
   document.getElementById('r-pair').onclick = jumpToPair;
-  document.getElementById('r-undo').onclick = undoInk;
-  document.getElementById('r-clear').onclick = () => { if (r.strokes.length && confirm('Alle Stift-Einträge auf dieser Seite löschen?')) { pushHistory(); r.strokes = []; drawInk(); saveInk(); } };
+  document.getElementById('r-split').onclick = toggleSplit;
+  document.getElementById('r-undo').onclick = () => undoInk(activePane());
+  document.getElementById('r-clear').onclick = () => {
+    const p = activePane();
+    if (p.strokes.length && confirm('Alle Stift-Einträge auf dieser Seite löschen?')) {
+      pushHistory(p); p.strokes = []; drawInk(p); saveInk(p);
+    }
+  };
   $app.querySelectorAll('.swatch').forEach(b => b.onclick = () => { r.color = b.dataset.color; r.tool = 'pen'; updateReaderChrome(); });
   $app.querySelector('[data-tool=eraser]').onclick = () => { r.tool = 'eraser'; updateReaderChrome(); };
   document.getElementById('r-note').oninput = scheduleNoteSave;
 
-  setupInk();
-  setupSwipe();
-  renderPage();
+  r.panes.forEach((p, i) => {
+    const el = $app.querySelector(`.r-pane[data-i="${i}"]`);
+    p.el = el;
+    p.stage = el.querySelector('.r-stage');
+    p.pdfC = el.querySelector('.c-pdf');
+    p.inkC = el.querySelector('.c-ink');
+    p.wrap = el.querySelector('.r-page');
+    el.addEventListener('pointerdown', () => setActive(i), true);
+    el.querySelectorAll('[data-nav]').forEach(b => b.onclick = () => goPage(p, p.page + +b.dataset.nav));
+    el.querySelector('.r-pno').onclick = () => askPage(p);
+    setupInk(p);
+    setupSwipe(p);
+  });
+
+  updateReaderChrome();
+  renderAllPanes();
+  loadNoteField();
+}
+
+function setActive(i) {
+  const r = reader;
+  if (!r || r.active === i || !r.panes[i]) return;
+  saveNoteNow();
+  r.active = i;
+  updateReaderChrome();
+  loadNoteField();
+}
+
+function askPage(p) {
+  const v = prompt(`Zu Seite (1–${p.doc.numPages}):`, p.page);
+  if (v) goPage(p, parseInt(v, 10));
 }
 
 function updateReaderChrome() {
   const r = reader;
-  if (!r) return;
+  if (!r || !document.querySelector('.reader')) return;
+  const p = activePane();
+  const split = r.panes.length > 1;
   const root = $app.querySelector('.reader');
   root.classList.toggle('pen', r.mode === 'pen');
   root.classList.toggle('notes', r.notesOpen);
+  root.classList.toggle('split', split);
+
   document.getElementById('r-pen').classList.toggle('on', r.mode === 'pen');
   document.getElementById('r-ans').classList.toggle('on', r.notesOpen);
   $app.querySelectorAll('.swatch').forEach(b => b.classList.toggle('on', r.tool === 'pen' && b.dataset.color === r.color));
   $app.querySelector('[data-tool=eraser]').classList.toggle('on', r.tool === 'eraser');
-  document.getElementById('r-pageno').textContent = `${r.page} / ${r.doc.numPages}`;
-  document.getElementById('r-note-page').textContent = r.page;
 
-  const at = lessonAt(r.id, r.page);
-  document.getElementById('r-lesson').textContent = at ? `Level ${at.level} · Lektion ${at.lesson}` : '';
-  const pair = pairTarget();
+  // Kopfzeile
+  const at = lessonAt(p.id, p.page);
+  document.getElementById('r-title').textContent = split ? `${r.panes[0].title} · ${r.panes[1].title}` : p.title;
+  const at0 = lessonAt(r.panes[0].id, r.panes[0].page);
+  document.getElementById('r-lesson').textContent = (split ? at0 : at) ? `Level ${(split ? at0 : at).level} · Lektion ${(split ? at0 : at).lesson}` : '';
+  document.getElementById('r-pageno').textContent = `${p.page} / ${p.doc.numPages}`;
+  document.getElementById('r-pageno').hidden = split;
+  document.getElementById('r-note-page').textContent = `${p.title}, S. ${p.page}`;
+
+  // Pane-Köpfe
+  r.panes.forEach((q, i) => {
+    if (!q.el) return;
+    q.el.classList.toggle('active', split && i === r.active);
+    q.el.querySelector('.r-ptitle').textContent = q.title;
+    q.el.querySelector('.r-pno').textContent = `${q.page} / ${q.doc.numPages}`;
+  });
+
+  // Gegenstück / Nebeneinander
+  const pair = pairTargetFor(r.panes[0]);
+  const sb = document.getElementById('r-split');
+  sb.hidden = !(canSplitScreen() && (pair || split));
+  sb.classList.toggle('on', split);
   const pb = document.getElementById('r-pair');
-  pb.disabled = !pair;
-  document.getElementById('r-pair-l').textContent = pair ? (pair.kind === 'workbook' ? 'Workbook' : 'Lehrbuch') : 'Gegenstück';
+  pb.hidden = split;
+  const single = pairTargetFor(p);
+  pb.disabled = !single;
+  document.getElementById('r-pair-l').textContent = single ? (single.kind === 'workbook' ? 'Workbook' : 'Lehrbuch') : 'Gegenstück';
+  document.getElementById('r-zoom-l').textContent = p.zoom === 1 ? 'Zoom' : `${p.zoom}×`;
 }
 
-function pairTarget() {
-  const r = reader;
-  const at = lessonAt(r.id, r.page);
+function lessonKeyOf(p) {
+  const at = lessonAt(p.id, p.page);
+  return at ? `${at.level}-${at.lesson}` : null;
+}
+
+function pairTargetFor(p) {
+  if (!p) return null;
+  const at = lessonAt(p.id, p.page);
   if (!at) return null;
-  const isWb = r.id.startsWith('wb-');
-  const kind = isWb ? 'textbook' : 'workbook';
+  const kind = p.id.startsWith('wb-') ? 'textbook' : 'workbook';
   const t = lessonPage(kind, at.level, at.lesson);
   return t ? { ...t, kind } : null;
 }
 
 async function jumpToPair() {
-  const t = pairTarget();
+  const p = activePane();
+  const t = pairTargetFor(p);
   if (!t) return;
   saveNoteNow();
-  lib().last[reader.id] = reader.page;
+  lib().last[p.id] = p.page;
   save();
-  reader.doc.destroy();
+  reader.panes.forEach(q => q.doc.destroy());
   reader = null;
-  await openReader(t.id, t.page);
+  await openReader(t.id, t.page, { split: false });
 }
 
-async function goPage(p) {
+async function toggleSplit() {
   const r = reader;
-  if (!r || isNaN(p)) return;
-  p = Math.min(Math.max(1, p), r.doc.numPages);
-  if (p === r.page) return;
   saveNoteNow();
-  r.page = p;
-  lib().last[r.id] = p;
+  if (r.panes.length > 1) {
+    const second = r.panes.pop();
+    lib().last[second.id] = second.page;
+    second.doc.destroy();
+    r.active = 0;
+    lib().split = false;
+  } else {
+    setBusy('Gegenstück wird geöffnet …');
+    try {
+      if (!(await addPairPane())) { setBusy(null); return; }
+    } catch (e) { setBusy(null); toast('Gegenstück konnte nicht geöffnet werden'); return; }
+    setBusy(null);
+    lib().split = true;
+  }
   save();
-  await renderPage();
-  document.getElementById('r-stage').scrollTo(0, 0);
+  renderReader();
 }
 
-async function renderPage() {
-  const r = reader;
-  if (!r) return;
-  updateReaderChrome();
-  lib().last[r.id] = r.page;
+async function goPage(p, n) {
+  if (!reader || !p || isNaN(n)) return;
+  n = Math.min(Math.max(1, n), p.doc.numPages);
+  if (n === p.page) return;
+  if (p === activePane()) saveNoteNow();
+  p.page = n;
+  lib().last[p.id] = n;
   save();
+  await renderPane(p);
+  p.stage.scrollTo(0, 0);
 
-  const stage = document.getElementById('r-stage');
-  const pdfC = document.getElementById('r-pdf');
-  const inkC = document.getElementById('r-ink');
-  const wrap = document.getElementById('r-page');
-  const pageNo = r.page;
+  // Erstes Pane gibt die Lektion vor: beginnt eine neue, folgt das zweite
+  const r = reader;
+  if (r && r.panes.length > 1 && p === r.panes[0]) {
+    const key = lessonKeyOf(p);
+    if (key && key !== p.lessonKey) {
+      p.lessonKey = key;
+      const t = pairTargetFor(p);
+      const other = r.panes[1];
+      if (t && t.id === other.id && lessonKeyOf(other) !== key) {
+        other.page = t.page;
+        lib().last[other.id] = t.page;
+        save();
+        await renderPane(other);
+        other.stage.scrollTo(0, 0);
+      }
+    }
+  }
+}
 
-  if (r.renderTask) { try { r.renderTask.cancel(); } catch (e) { /* egal */ } }
-  const page = await r.doc.getPage(pageNo);
-  if (!reader || reader.page !== pageNo) return;
+function renderAllPanes(reload = true) {
+  if (!reader) return;
+  reader.panes.forEach(p => renderPane(p, reload && !p.loadedKey));
+}
 
+// reload = false: nur neu zeichnen (Zoom, Drehen, Antwortfeld) – Stift und Antworten bleiben unangetastet
+async function renderPane(p, reload = true) {
+  const r = reader;
+  if (!r || !p.stage) return;
+  updateReaderChrome();
+  const pageNo = p.page;
+  if (p.renderTask) { try { p.renderTask.cancel(); } catch (e) { /* egal */ } }
+  const page = await p.doc.getPage(pageNo);
+  if (!reader || p.page !== pageNo) return;
+
+  // Größe: im Hochformat auf Breite, im Querformat bzw. nebeneinander ganze Seite einpassen
   const base = page.getViewport({ scale: 1 });
-  const cssW = Math.floor((stage.clientWidth - 16) * r.zoom);
-  const scale = cssW / base.width;
+  const availW = Math.max(100, p.stage.clientWidth - 16);
+  const availH = Math.max(100, p.stage.clientHeight - 16);
+  const fitW = availW / base.width;
+  const fitPage = Math.min(fitW, availH / base.height);
+  const wide = availW > availH || r.panes.length > 1;
+  const scale = (wide ? fitPage : fitW) * p.zoom;
   const vp = page.getViewport({ scale });
+
   let dpr = Math.min(window.devicePixelRatio || 1, 2.5);
   const maxPixels = 14e6; // Grenze für iOS-Canvas
   if (vp.width * vp.height * dpr * dpr > maxPixels) dpr = Math.sqrt(maxPixels / (vp.width * vp.height));
-
-  for (const c of [pdfC, inkC]) {
+  for (const c of [p.pdfC, p.inkC]) {
     c.width = Math.floor(vp.width * dpr);
     c.height = Math.floor(vp.height * dpr);
     c.style.width = Math.floor(vp.width) + 'px';
     c.style.height = Math.floor(vp.height) + 'px';
   }
-  wrap.style.width = Math.floor(vp.width) + 'px';
-  wrap.style.height = Math.floor(vp.height) + 'px';
-  r.dpr = dpr;
+  p.wrap.style.width = Math.floor(vp.width) + 'px';
+  p.wrap.style.height = Math.floor(vp.height) + 'px';
 
-  const ctx = pdfC.getContext('2d');
+  const ctx = p.pdfC.getContext('2d');
   ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, pdfC.width, pdfC.height);
-  r.renderTask = page.render({ canvasContext: ctx, viewport: vp, transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null });
-  try { await r.renderTask.promise; } catch (e) { if (e && e.name === 'RenderingCancelledException') return; }
+  ctx.fillRect(0, 0, p.pdfC.width, p.pdfC.height);
+  p.renderTask = page.render({ canvasContext: ctx, viewport: vp, transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null });
+  try { await p.renderTask.promise; } catch (e) { if (e && e.name === 'RenderingCancelledException') return; }
 
-  // Stift & Notizen dieser Seite laden
-  const key = `${r.id}:${pageNo}`;
+  const key = `${p.id}:${pageNo}`;
+  if (!reload && p.loadedKey === key) { drawInk(p); return; }
   const [ink, note] = await Promise.all([idb.get('ink', key), idb.get('notes', key)]);
-  if (!reader || reader.page !== pageNo) return;
-  r.strokes = ink || [];
-  r.history = [];
-  drawInk();
+  if (!reader || p.page !== pageNo) return;
+  p.strokes = ink || [];
+  p.history = [];
+  p.note = note || '';
+  p.loadedKey = key;
+  drawInk(p);
+  if (p === activePane()) loadNoteField();
+}
+
+function loadNoteField() {
+  const p = activePane();
   const ta = document.getElementById('r-note');
-  ta.value = note || '';
-  document.getElementById('r-ans').classList.toggle('has', !!note);
+  if (!p || !ta) return;
+  ta.value = p.note || '';
+  document.getElementById('r-ans').classList.toggle('has', !!(p.note || '').trim());
 }
 
 /* ----- Stift ----- */
 
-function setupInk() {
-  const c = document.getElementById('r-ink');
+let penSeen = false;
+
+function setupInk(p) {
+  const c = p.inkC;
   let cur = null;
-  let penSeen = false;
   const pos = e => {
     const b = c.getBoundingClientRect();
     return [(e.clientX - b.left) / b.width, (e.clientY - b.top) / b.height];
@@ -612,52 +774,48 @@ function setupInk() {
   c.addEventListener('pointerdown', e => {
     if (!reader || reader.mode !== 'pen') return;
     if (e.pointerType === 'pen') penSeen = true;
-    if (penSeen && e.pointerType === 'touch') return; // Handballen ignorieren, wenn ein Pencil benutzt wird
+    if (penSeen && e.pointerType === 'touch') return; // Handballen ignorieren, sobald ein Pencil benutzt wurde
     e.preventDefault();
     c.setPointerCapture(e.pointerId);
-    pushHistory();
-    if (reader.tool === 'eraser') { cur = { erase: true }; eraseAt(pos(e)); return; }
+    pushHistory(p);
+    if (reader.tool === 'eraser') { cur = { erase: true }; eraseAt(p, pos(e)); return; }
     cur = { c: reader.color, w: 0.0035, p: [pos(e)] };
-    reader.strokes.push(cur);
+    p.strokes.push(cur);
   });
   c.addEventListener('pointermove', e => {
     if (!cur) return;
     e.preventDefault();
-    if (cur.erase) { eraseAt(pos(e)); return; }
+    if (cur.erase) { eraseAt(p, pos(e)); return; }
     const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
     for (const ev of evs) cur.p.push(pos(ev));
-    drawInk();
+    drawInk(p);
   });
   const end = () => {
     if (!cur) return;
     if (!cur.erase && cur.p.length === 1) cur.p.push([cur.p[0][0] + 0.0005, cur.p[0][1]]);
     cur = null;
-    drawInk();
-    saveInk();
+    drawInk(p);
+    saveInk(p);
   };
   c.addEventListener('pointerup', end);
   c.addEventListener('pointercancel', end);
 }
 
-function eraseAt([x, y]) {
-  const r = reader;
-  const c = document.getElementById('r-ink');
-  const ratio = c.height / c.width;
-  const rad = 0.02;
-  const before = r.strokes.length;
-  r.strokes = r.strokes.filter(s => !s.p.some(([px, py]) => Math.hypot(px - x, (py - y) * ratio) < rad));
-  if (r.strokes.length !== before) drawInk();
+function eraseAt(p, [x, y]) {
+  const ratio = p.inkC.height / p.inkC.width;
+  const before = p.strokes.length;
+  p.strokes = p.strokes.filter(s => !s.p.some(([px, py]) => Math.hypot(px - x, (py - y) * ratio) < 0.02));
+  if (p.strokes.length !== before) drawInk(p);
 }
 
-function drawInk() {
-  const r = reader;
-  const c = document.getElementById('r-ink');
-  if (!r || !c) return;
+function drawInk(p) {
+  const c = p.inkC;
+  if (!c) return;
   const ctx = c.getContext('2d');
   ctx.clearRect(0, 0, c.width, c.height);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  for (const s of r.strokes) {
+  for (const s of p.strokes) {
     ctx.strokeStyle = s.c;
     ctx.lineWidth = Math.max(1, s.w * c.width);
     ctx.beginPath();
@@ -673,25 +831,22 @@ function drawInk() {
   }
 }
 
-function pushHistory() {
-  const r = reader;
-  r.history.push(JSON.stringify(r.strokes));
-  if (r.history.length > 40) r.history.shift();
+function pushHistory(p) {
+  p.history.push(JSON.stringify(p.strokes));
+  if (p.history.length > 40) p.history.shift();
 }
 
-function undoInk() {
-  const r = reader;
-  if (!r || !r.history.length) return;
-  r.strokes = JSON.parse(r.history.pop());
-  drawInk();
-  saveInk();
+function undoInk(p) {
+  if (!p || !p.history.length) return;
+  p.strokes = JSON.parse(p.history.pop());
+  drawInk(p);
+  saveInk(p);
 }
 
-function saveInk() {
-  const r = reader;
-  if (!r) return;
-  const key = `${r.id}:${r.page}`;
-  (r.strokes.length ? idb.put('ink', key, r.strokes) : idb.del('ink', key)).catch(() => toast('Stift-Einträge konnten nicht gespeichert werden'));
+function saveInk(p) {
+  const key = `${p.id}:${p.page}`;
+  (p.strokes.length ? idb.put('ink', key, p.strokes) : idb.del('ink', key))
+    .catch(() => toast('Stift-Einträge konnten nicht gespeichert werden'));
 }
 
 /* ----- Antworten ----- */
@@ -703,11 +858,13 @@ function scheduleNoteSave() {
 }
 function saveNoteNow() {
   clearTimeout(noteTimer);
-  const r = reader;
+  const p = activePane();
   const ta = document.getElementById('r-note');
-  if (!r || !ta) return;
-  const key = `${r.id}:${r.page}`;
+  if (!p || !ta) return;
   const v = ta.value;
+  if (v === (p.note || '')) return;
+  p.note = v;
+  const key = `${p.id}:${p.page}`;
   (v.trim() ? idb.put('notes', key, v) : idb.del('notes', key)).catch(() => {});
   const b = document.getElementById('r-ans');
   if (b) b.classList.toggle('has', !!v.trim());
@@ -715,29 +872,47 @@ function saveNoteNow() {
 
 /* ----- Wischen zum Blättern ----- */
 
-function setupSwipe() {
-  const st = document.getElementById('r-stage');
+function setupSwipe(p) {
   let sx = 0, sy = 0, t0 = 0;
-  st.addEventListener('touchstart', e => {
+  p.stage.addEventListener('touchstart', e => {
     if (e.touches.length !== 1) { t0 = 0; return; }
     sx = e.touches[0].clientX; sy = e.touches[0].clientY; t0 = Date.now();
   }, { passive: true });
-  st.addEventListener('touchend', e => {
-    if (!reader || reader.mode === 'pen' || reader.zoom !== 1 || !t0) return;
+  p.stage.addEventListener('touchend', e => {
+    if (!reader || reader.mode === 'pen' || p.zoom !== 1 || !t0) return;
     const dx = e.changedTouches[0].clientX - sx;
     const dy = e.changedTouches[0].clientY - sy;
-    if (Date.now() - t0 < 600 && Math.abs(dx) > 60 && Math.abs(dy) < 50) goPage(reader.page + (dx < 0 ? 1 : -1));
+    if (Date.now() - t0 < 600 && Math.abs(dx) > 60 && Math.abs(dy) < 50) goPage(p, p.page + (dx < 0 ? 1 : -1));
   }, { passive: true });
 }
 
 document.addEventListener('keydown', e => {
   if (view !== 'reader' || !reader || e.target.matches('input, textarea, select')) return;
-  if (e.key === 'ArrowRight') goPage(reader.page + 1);
-  else if (e.key === 'ArrowLeft') goPage(reader.page - 1);
+  if (e.key === 'ArrowRight') goPage(activePane(), activePane().page + 1);
+  else if (e.key === 'ArrowLeft') goPage(activePane(), activePane().page - 1);
   else if (e.key === 'Escape') closeReader();
 });
 
-window.addEventListener('resize', () => { if (view === 'reader' && reader) renderPage(); });
+// Drehen / Größe ändern: neu einpassen, zu schmal für zwei Bücher → eins schließen
+let resizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (view !== 'reader' || !reader) return;
+    if (reader.panes.length > 1 && !canSplitScreen()) {
+      saveNoteNow();
+      const second = reader.panes.pop();
+      lib().last[second.id] = second.page;
+      second.doc.destroy();
+      reader.active = 0;
+      save();
+      renderReader();
+      return;
+    }
+    updateReaderChrome();
+    renderAllPanes(false);
+  }, 150);
+});
 
 /* ---------------- Backup-Erweiterung ---------------- */
 

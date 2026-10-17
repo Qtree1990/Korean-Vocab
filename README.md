@@ -36,6 +36,7 @@ Unter **Bibliothek → PDFs hinzufügen** wählst du deine PDFs in der Dateien-A
 - Im Leser springt **Workbook / Lehrbuch** zur passenden Seite derselben Lektion im anderen Buch.
 - **Stift**: mit Finger oder Apple Pencil auf die Seite schreiben (drei Farben, Radierer, Rückgängig). **Antworten**: Textfeld pro Seite.
 - Lektionen in der Liste abhaken; „Weiter mit Lektion …“ führt zur nächsten offenen.
+- **iPad:** Im Querformat zeigt der Leser Lehrbuch und Workbook **nebeneinander**. Beginnt im Lehrbuch eine neue Lektion, springt das Workbook automatisch mit. Im Querformat wird die ganze Seite eingepasst, im Hochformat die Breite; der Knopf „Nebeneinander“ oben schaltet die Ansicht um.
 
 ## Vokabeln erweitern
 
