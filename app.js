@@ -34,7 +34,8 @@ function defaultState() {
     settings: { newPerDay: 15, direction: 'both', autoSpeak: true, showRom: true, disabledDecks: [] },
     progress: {},   // "deck::ko|kd" -> {ease, ivl, reps, lapses, due, last}
     own: [],        // eigene Karten {id, ko, rom, de}
-    log: {}         // Tag -> {reviews, learnedNew}
+    log: {},        // Tag -> {reviews, learnedNew}
+    library: { installed: {}, done: {}, last: {}, maps: {}, stage: 1 }
   };
 }
 
@@ -44,7 +45,7 @@ function loadState() {
     const raw = localStorage.getItem(STORE_KEY);
     if (!raw) return base;
     const s = JSON.parse(raw);
-    return { ...base, ...s, settings: { ...base.settings, ...(s.settings || {}) } };
+    return { ...base, ...s, settings: { ...base.settings, ...(s.settings || {}) }, library: { ...base.library, ...(s.library || {}) } };
   } catch (e) {
     return base;
   }
@@ -227,7 +228,8 @@ function streak() {
 
 function setView(v) {
   view = v;
-  document.body.classList.toggle('studying', v === 'study');
+  document.body.classList.toggle('studying', v === 'study' || v === 'reader');
+  document.body.classList.toggle('reading', v === 'reader');
   $tabs.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.view === v));
   render();
   window.scrollTo(0, 0);
@@ -238,6 +240,8 @@ function render() {
   else if (view === 'study') renderStudy();
   else if (view === 'cards') renderCards();
   else if (view === 'settings') renderSettings();
+  else if (view === 'library') renderLibrary();
+  else if (view === 'reader') renderReader();
 }
 
 /* ----- Startseite ----- */
@@ -559,7 +563,7 @@ function renderSettings() {
     <div class="actions">
       <button class="btn ghost danger" id="reset">Lernfortschritt löschen (${learned})</button>
     </div>
-    <p class="hint">Alles wird nur auf diesem Gerät gespeichert. Exportiere ab und zu ein Backup.</p>
+    <p class="hint">Alles wird nur auf diesem Gerät gespeichert. Das Backup enthält Vokabel-Fortschritt, abgehakte Lektionen, Stift-Einträge und Antworten – aber nicht die PDFs selbst.</p>
   `;
 
   const bind = (id, fn) => { document.getElementById(id).onchange = fn; };
@@ -587,7 +591,8 @@ function renderSettings() {
 async function exportBackup() {
   const d = new Date();
   const name = `koreanisch-backup-${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.json`;
-  const blob = new Blob([JSON.stringify(state, null, 1)], { type: 'application/json' });
+  const extra = typeof libraryBackupData === 'function' ? await libraryBackupData() : null;
+  const blob = new Blob([JSON.stringify({ ...state, libraryData: extra }, null, 1)], { type: 'application/json' });
   try {
     const file = new File([blob], name, { type: 'application/json' });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -621,7 +626,10 @@ async function importBackup(file) {
     if (!data || typeof data.progress !== 'object') throw new Error('kein Backup');
     if (!confirm('Backup laden? Der aktuelle Stand auf diesem Gerät wird ersetzt.')) return;
     const base = defaultState();
-    state = { ...base, ...data, settings: { ...base.settings, ...(data.settings || {}) } };
+    const { libraryData, ...rest } = data;
+    const installed = state.library ? state.library.installed : {};
+    state = { ...base, ...rest, settings: { ...base.settings, ...(rest.settings || {}) }, library: { ...base.library, ...(rest.library || {}), installed } };
+    if (libraryData && typeof libraryRestoreData === 'function') await libraryRestoreData(libraryData);
     save();
     toast('Backup geladen');
     renderSettings();

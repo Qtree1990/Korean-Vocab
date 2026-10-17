@@ -1,11 +1,14 @@
 // Service Worker: macht die App offline nutzbar.
 // Strategie: erst Netzwerk (damit Updates sofort ankommen), bei Offline der Cache.
-const CACHE = 'koreanisch-karten-v1';
+const CACHE = 'koreanisch-karten-v2';
 const FILES = [
   './',
   './index.html',
   './style.css',
   './app.js',
+  './library.js',
+  './vendor/pdfjs/pdf.min.js',
+  './vendor/pdfjs/pdf.worker.min.js',
   './vocab.json',
   './manifest.webmanifest',
   './icons/icon-180.png',

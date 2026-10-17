@@ -8,6 +8,7 @@ Ein kleiner Vokabeltrainer für Koreanisch im Stil von Anki – als Web-App, die
 - **Startset** mit rund 170 Karten: Hangul, Begrüßung, Zahlen, Essen, Familie, Alltag, Verben, Adjektive, Fragewörter.
 - **Eigene Karten** direkt in der App anlegen oder per CSV importieren.
 - **Backup** als JSON exportieren und wieder einspielen.
+- **Bibliothek** für eigene PDFs (z. B. Talk To Me In Korean): Lernpfad nach Stufen, Lehrbuch- und Workbook-Lektion nebeneinander, PDF-Leser mit Stift und Antwortfeld.
 
 Alles bleibt lokal auf dem Gerät, es gibt keinen Server und kein Konto.
 
@@ -26,6 +27,16 @@ Alles bleibt lokal auf dem Gerät, es gibt keinen Server und kein Konto.
 
 Keine Stimme zu hören? Einstellungen → Bedienungshilfen → Gesprochene Inhalte → Stimmen → Koreanisch → Stimme laden.
 
+## Bibliothek
+
+Unter **Bibliothek → PDFs hinzufügen** wählst du deine PDFs in der Dateien-App aus. Sie werden nur in der App auf diesem Gerät gespeichert; im Repository liegen keine Buchinhalte (`*.pdf` ist in `.gitignore` ausgeschlossen).
+
+- Die App erkennt die TTMIK-Bücher am Dateinamen und sortiert sie in die Stufen Einstieg, Grundlagen, Mittelstufe und Fortgeschritten.
+- Im Lehrbuch Level 1–9 (Ausgabe mit 938 Seiten) sind die Startseiten aller Lektionen hinterlegt. In den Workbooks sucht die App die Lektionen beim Hinzufügen selbst.
+- Im Leser springt **Workbook / Lehrbuch** zur passenden Seite derselben Lektion im anderen Buch.
+- **Stift**: mit Finger oder Apple Pencil auf die Seite schreiben (drei Farben, Radierer, Rückgängig). **Antworten**: Textfeld pro Seite.
+- Lektionen in der Liste abhaken; „Weiter mit Lektion …“ führt zur nächsten offenen.
+
 ## Vokabeln erweitern
 
 Die eingebauten Karten stehen in `vocab.json`. Neue Stapel oder Wörter einfach dort ergänzen:
@@ -43,7 +54,9 @@ CSV-Import in der App: eine Karte pro Zeile, `Koreanisch;Lautschrift;Deutsch` od
 | Datei | Zweck |
 |---|---|
 | `index.html` | Grundgerüst |
-| `app.js` | gesamte Logik (Planung, Ansichten, Import/Export) |
+| `app.js` | Vokabeltrainer (Planung, Ansichten, Import/Export) |
+| `library.js` | Bibliothek, PDF-Leser, Stift und Antworten |
+| `vendor/pdfjs/` | [pdf.js](https://mozilla.github.io/pdf.js/) 3.11 (Apache-2.0) zum Anzeigen der PDFs |
 | `style.css` | Gestaltung, hell und dunkel |
 | `vocab.json` | eingebaute Vokabeln |
 | `sw.js` | Service Worker für Offline-Betrieb |
